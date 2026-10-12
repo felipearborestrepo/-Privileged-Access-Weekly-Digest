@@ -55,24 +55,6 @@ digest and detailed CSV — all in a single run.
 
 ---
 
-## 📊 Digest Output
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-PRIVILEGED ACCESS WEEKLY DIGEST
-Week of: October 12 2026
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Total privileged assignments : 3
-Admins with no MFA : 0 ✅
-Admins inactive 90+ days : 1 🔴
-Disabled accounts with roles : 0 ✅
-Over-privileged admins : 0 ✅
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-OVERALL RISK: HIGH
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-
----
-
 ## 🔍 Overall Risk Calculation
 
 | Findings Flagged | Risk Level |
