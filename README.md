@@ -75,13 +75,13 @@ overPrivCount -gt 0 → at least one admin has multiple roles
 
 ## 🎯 High Risk Roles Monitored
 
-Global Administrator
-Privileged Role Administrator
-Security Administrator
-User Administrator
-Application Administrator
-Exchange Administrator
-SharePoint Administrator
+- Global Administrator
+- Privileged Role Administrator
+- Security Administrator
+- User Administrator
+- Application Administrator
+- Exchange Administrator
+- SharePoint Administrator
 
 
 ---
@@ -115,7 +115,34 @@ $userRoles        = @{}
 
 ---
 
-**Step 3 — Pulled all directory roles**
+**Step 3 — Array list will the high risk roles**
+```powershell
+$highRiskRoles = @(
+    "Global Administrator"
+    "Privileged Role Administrator"
+    "Security Administrator"
+    "User Administrator"
+    "Application Administrator"
+    "Exchange Administrator"
+    "SharePoint Administrator"
+)
+```
+- Not all admin roles carry the same risk
+- A Reports Reader admin is low risk — read only access to reports
+- A Global Administrator can do anything in the tenant — highest risk
+- The seven roles in this list can all cause catastrophic damage if compromised:
+
+| Role | Why It Is High Risk |
+|---|---|
+| Global Administrator | Full control of entire tenant |
+| Privileged Role Administrator | Can assign any role to anyone |
+| Security Administrator | Controls security policies and MFA |
+| User Administrator | Can reset passwords including other admins |
+| Application Administrator | Can create apps and grant permissions |
+| Exchange Administrator | Full access to all email in the tenant |
+| SharePoint Administrator | Full access to all files and SharePoint sites |
+
+**Step 4 — Pulled all directory roles**
 ```powershell
 $roles = Get-MgDirectoryRole
 ```
@@ -125,7 +152,7 @@ $roles = Get-MgDirectoryRole
 
 ---
 
-**Step 4 — Skipped non-high-risk roles**
+**Step 5 — Skipped non-high-risk roles**
 ```powershell
 if (-not ($highRiskRoles -contains $role.DisplayName)) { continue }
 ```
@@ -135,7 +162,7 @@ if (-not ($highRiskRoles -contains $role.DisplayName)) { continue }
 
 ---
 
-**Step 5 — Got members per role**
+**Step 6 — Got members per role**
 ```powershell
 $members = Get-MgDirectoryRoleMember -DirectoryRoleId $role.Id
 ```
@@ -146,7 +173,7 @@ $members = Get-MgDirectoryRoleMember -DirectoryRoleId $role.Id
 
 ---
 
-**Step 6 — Got full user details per member**
+**Step 7 — Got full user details per member**
 ```powershell
 $memberId   = $member.Id
 $memberName = $member.AdditionalProperties["displayName"]
@@ -160,7 +187,7 @@ $user = Get-MgUser -UserId $memberId -Property "Id,DisplayName,UserPrincipalName
 
 ---
 
-**Step 7 — Ran five checks per admin**
+**Step 8 — Ran five checks per admin**
 ```powershell
 $totalAssignments++
 if ($user.AccountEnabled -eq $false) { $disabledCount++ }
@@ -173,7 +200,7 @@ if (-not $hasMFA)                    { $noMFACount++ }
 
 ---
 
-**Step 8 — Checked MFA per admin**
+**Step 9 — Checked MFA per admin**
 ```powershell
 $methods = Get-MgUserAuthenticationMethod -UserId $memberId
 $hasMFA  = $methods.Count -gt 1
@@ -188,7 +215,7 @@ if (-not $hasMFA) { $noMFACount++ }
 
 ---
 
-**Step 9 — Stored MFA status in hashtable entry**
+**Step 10 — Stored MFA status in hashtable entry**
 ```powershell
 $userRoles[$memberId].HasMFA = if ($hasMFA) { "Yes" } else { "No" }
 ```
@@ -198,7 +225,7 @@ $userRoles[$memberId].HasMFA = if ($hasMFA) { "Yes" } else { "No" }
 
 ---
 
-**Step 10 — Built hashtable for over-privileged detection**
+**Step 11 — Built hashtable for over-privileged detection**
 ```powershell
 if ($userRoles.ContainsKey($memberId)) {
     $userRoles[$memberId].Roles.Add($role.DisplayName)
@@ -214,7 +241,7 @@ if ($userRoles.ContainsKey($memberId)) {
 
 ---
 
-**Step 11 — Counted over-privileged admins**
+**Step 12 — Counted over-privileged admins**
 ```powershell
 $overPrivCount = 0
 foreach ($entry in $userRoles.Values) {
@@ -227,7 +254,7 @@ foreach ($entry in $userRoles.Values) {
 
 ---
 
-**Step 12 — Built CSV from hashtable**
+**Step 13 — Built CSV from hashtable**
 ```powershell
 foreach ($entry in $userRoles.Values) {
     $results.Add([PSCustomObject]@{
@@ -245,7 +272,7 @@ foreach ($entry in $userRoles.Values) {
 
 ---
 
-**Step 13 — Calculated overall risk**
+**Step 14 — Calculated overall risk**
 ```powershell
 $highFindings = 0
 if ($noMFACount -gt 0)    { $highFindings++ }
@@ -263,7 +290,7 @@ $overallRisk = if ($highFindings -ge 3)    { "CRITICAL" }
 
 ---
 
-**Step 14 — Printed digest and exported CSV**
+**Step 15 — Printed digest and exported CSV**
 - Digest printed to screen with dynamic colors
 - Green when count is zero — red or yellow when flagged
 - CSV exported with full admin details for deeper investigation
