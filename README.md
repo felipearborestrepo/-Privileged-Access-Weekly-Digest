@@ -23,14 +23,6 @@ Inactive admin accounts → forgotten accounts nobody is watching
 Disabled accounts with roles → should have been cleaned up — still a risk
 Over-privileged admins → principle of least privilege violated
 
-
-### What This Script Delivers
-- Five security checks combined into one weekly run
-- Clean formatted digest for security team review
-- Full CSV with one row per unique admin — no duplicates
-- Overall risk score combining all findings
-- Recurring capability — schedule every Friday
-
 ---
 
 ## 📄 Executive Summary
@@ -47,8 +39,6 @@ digest and detailed CSV — all in a single run.
 
 **Result:** Complete privileged access health picture in under
 10 minutes — ready to share with the security team every Friday.
-
-**Time to value:** Under 10 minutes from first run to digest ready.
 
 ---
 
@@ -201,7 +191,32 @@ if (-not $hasMFA)                    { $noMFACount++ }
 
 ---
 
-**Step 8 — Built hashtable for over-privileged detection**
+**Step 8 — Checked MFA per admin**
+```powershell
+$methods = Get-MgUserAuthenticationMethod -UserId $memberId
+$hasMFA  = $methods.Count -gt 1
+if (-not $hasMFA) { $noMFACount++ }
+```
+- `Get-MgUserAuthenticationMethod` returns all registered methods per user
+- Every user always has at least one method — their password
+- Count greater than 1 means at least one MFA method is registered
+- Count of 1 means password only — no MFA — counter incremented
+- Requires `UserAuthenticationMethod.Read.All` scope
+- One API call per admin — on large tenants this is the slowest part of the script
+
+---
+
+**Step 9 — Stored MFA status in hashtable entry**
+```powershell
+$userRoles[$memberId].HasMFA = if ($hasMFA) { "Yes" } else { "No" }
+```
+- MFA status stored on the user's hashtable entry
+- Reused when building the CSV — no second MFA call needed
+- Existing entries updated when user appears in additional roles
+
+---
+
+**Step 10 — Built hashtable for over-privileged detection**
 ```powershell
 if ($userRoles.ContainsKey($memberId)) {
     $userRoles[$memberId].Roles.Add($role.DisplayName)
@@ -217,7 +232,7 @@ if ($userRoles.ContainsKey($memberId)) {
 
 ---
 
-**Step 9 — Counted over-privileged admins**
+**Step 11 — Counted over-privileged admins**
 ```powershell
 $overPrivCount = 0
 foreach ($entry in $userRoles.Values) {
@@ -230,7 +245,7 @@ foreach ($entry in $userRoles.Values) {
 
 ---
 
-**Step 10 — Built CSV from hashtable**
+**Step 12 — Built CSV from hashtable**
 ```powershell
 foreach ($entry in $userRoles.Values) {
     $results.Add([PSCustomObject]@{
@@ -248,7 +263,7 @@ foreach ($entry in $userRoles.Values) {
 
 ---
 
-**Step 11 — Calculated overall risk**
+**Step 13 — Calculated overall risk**
 ```powershell
 $highFindings = 0
 if ($noMFACount -gt 0)    { $highFindings++ }
@@ -266,13 +281,147 @@ $overallRisk = if ($highFindings -ge 3)    { "CRITICAL" }
 
 ---
 
-**Step 12 — Printed digest and exported CSV**
+**Step 14 — Printed digest and exported CSV**
 - Digest printed to screen with dynamic colors
 - Green when count is zero — red or yellow when flagged
 - CSV exported with full admin details for deeper investigation
 
 ---
 
+## Results in PowerShell
+
+<img width="327" height="153" alt="Screenshot 2026-10-12 at 18 31 46" src="https://github.com/user-attachments/assets/7daecf90-f341-4d1d-80eb-c515980bc6bf" />
+
+## Results in Excel 
+
+<img width="1079" height="87" alt="Screenshot 2026-10-12 at 18 32 57" src="https://github.com/user-attachments/assets/1d9e49c9-2d1a-41cb-89ca-8eabc79594a6" />
+
+## Script 
+
+```powershell
+Connect-MgGraph -Scopes "User.Read.All","RoleManagement.Read.All","AuditLog.Read.All","UserAuthenticationMethod.Read.All" -NoWelcome
+Write-Host "Connected to Graph" -ForegroundColor Green
+
+$today     = Get-Date
+$userRoles = @{}
+
+# Counters for digest
+$totalAssignments = 0
+$noMFACount       = 0
+$inactiveCount    = 0
+$disabledCount    = 0
+
+# Results for CSV
+$results = [System.Collections.Generic.List[PSCustomObject]]::new()
+
+$highRiskRoles = @(
+    "Global Administrator"
+    "Privileged Role Administrator"
+    "Security Administrator"
+    "User Administrator"
+    "Application Administrator"
+    "Exchange Administrator"
+    "SharePoint Administrator"
+)
+
+$roles = Get-MgDirectoryRole
+Write-Host "Scanning privileged access..." -ForegroundColor Cyan
+
+foreach ($role in $roles) {
+    if (-not ($highRiskRoles -contains $role.DisplayName)) { continue }
+
+    $members = Get-MgDirectoryRoleMember -DirectoryRoleId $role.Id
+
+    foreach ($member in $members) {
+
+        $memberId   = $member.Id
+        $memberName = $member.AdditionalProperties["displayName"]
+        $memberUPN  = $member.AdditionalProperties["userPrincipalName"]
+
+        $totalAssignments++
+
+        $user = Get-MgUser -UserId $memberId -Property "Id,DisplayName,UserPrincipalName,Department,AccountEnabled,SignInActivity"
+
+        if ($user.AccountEnabled -eq $false) { $disabledCount++ }
+
+        $lastSignIn      = $user.SignInActivity.LastSignInDateTime
+        $daysSinceSignIn = if ($lastSignIn) { [int]($today - $lastSignIn).TotalDays } else { 999 }
+        if ($daysSinceSignIn -ge 90) { $inactiveCount++ }
+
+        $methods = Get-MgUserAuthenticationMethod -UserId $memberId
+        $hasMFA  = $methods.Count -gt 1
+        if (-not $hasMFA) { $noMFACount++ }
+
+        if ($userRoles.ContainsKey($memberId)) {
+            $userRoles[$memberId].Roles.Add($role.DisplayName)
+            # Update existing entry with latest details
+            $userRoles[$memberId].HasMFA           = if ($hasMFA) { "Yes" } else { "No" }
+            $userRoles[$memberId].LastSignInDate    = if ($lastSignIn) { $lastSignIn.ToString("yyyy-MM-dd") } else { "Never" }
+            $userRoles[$memberId].DaysSinceSignIn   = if ($daysSinceSignIn -eq 999) { "Never" } else { $daysSinceSignIn }
+            $userRoles[$memberId].AccountEnabled    = $user.AccountEnabled
+            $userRoles[$memberId].Department        = $user.Department
+        } else {
+            $userRoles[$memberId] = [PSCustomObject]@{
+                DisplayName     = $memberName
+                UPN             = $memberUPN
+                Department      = $user.Department
+                AccountEnabled  = $user.AccountEnabled
+                HasMFA          = if ($hasMFA) { "Yes" } else { "No" }
+                LastSignInDate  = if ($lastSignIn) { $lastSignIn.ToString("yyyy-MM-dd") } else { "Never" }
+                DaysSinceSignIn = if ($daysSinceSignIn -eq 999) { "Never" } else { $daysSinceSignIn }
+                Roles           = [System.Collections.Generic.List[string]]::new()
+            }
+            $userRoles[$memberId].Roles.Add($role.DisplayName)
+        }
+    }
+}
+
+$overPrivCount = 0
+foreach ($entry in $userRoles.Values) {
+    if ($entry.Roles.Count -gt 1) { $overPrivCount++ }
+}
+
+foreach ($entry in $userRoles.Values) {
+    $results.Add([PSCustomObject]@{
+        DisplayName     = $entry.DisplayName
+        UPN             = $entry.UPN
+        Department      = $entry.Department
+        AccountEnabled  = $entry.AccountEnabled
+        RolesAssigned   = $entry.Roles -join ", "
+        RoleCount       = $entry.Roles.Count
+        HasMFA          = $entry.HasMFA
+        LastSignInDate  = $entry.LastSignInDate
+        DaysSinceSignIn = $entry.DaysSinceSignIn
+        OverPrivileged  = if ($entry.Roles.Count -gt 1) { "Yes" } else { "No" }
+    })
+}
+
+$results | Export-Csv -Path "$HOME/Desktop/PrivilegedAccessDigest.csv" -NoTypeInformation
+Write-Host "CSV exported to Desktop" -ForegroundColor Green
+
+$highFindings = 0
+if ($noMFACount -gt 0)    { $highFindings++ }
+if ($inactiveCount -gt 0) { $highFindings++ }
+if ($disabledCount -gt 0) { $highFindings++ }
+if ($overPrivCount -gt 0) { $highFindings++ }
+
+$overallRisk = if ($highFindings -ge 3)    { "CRITICAL" }
+               elseif ($highFindings -ge 1) { "HIGH" }
+               else                         { "LOW" }
+
+$riskColor = if ($overallRisk -eq "CRITICAL") { "Red" }
+             elseif ($overallRisk -eq "HIGH")   { "Yellow" }
+             else                               { "Green" }
+
+Write-Host "  PRIVILEGED ACCESS WEEKLY DIGEST" -ForegroundColor White
+Write-Host "  Week of: $(Get-Date -Format 'MMMM dd yyyy')" -ForegroundColor DarkGray
+Write-Host "  Total privileged assignments : $totalAssignments" -ForegroundColor White
+Write-Host "  Admins with no MFA           : $noMFACount $(if ($noMFACount -gt 0) { '🔴' } else { '✅' })" -ForegroundColor $(if ($noMFACount -gt 0) { "Red" } else { "Green" })
+Write-Host "  Admins inactive 90+ days     : $inactiveCount $(if ($inactiveCount -gt 0) { '🔴' } else { '✅' })" -ForegroundColor $(if ($inactiveCount -gt 0) { "Red" } else { "Green" })
+Write-Host "  Disabled accounts with roles : $disabledCount $(if ($disabledCount -gt 0) { '🔴' } else { '✅' })" -ForegroundColor $(if ($disabledCount -gt 0) { "Red" } else { "Green" })
+Write-Host "  Over-privileged admins       : $overPrivCount $(if ($overPrivCount -gt 0) { '🟡' } else { '✅' })" -ForegroundColor $(if ($overPrivCount -gt 0) { "Yellow" } else { "Green" })
+Write-Host "  OVERALL RISK: $overallRisk" -ForegroundColor $riskColor
+```
 ## 📋 Compliance Relevance
 
 | Framework | Control |
@@ -302,58 +451,3 @@ admin account posture in the acquired tenant.
 **Audit Preparation**
 Run before an audit to identify and remediate privileged
 access gaps before auditors find them.
-
----
-
-## ⚙️ Prerequisites
-
-- PowerShell 7.x
-- Microsoft.Graph PowerShell module
-
-```powershell
-Install-Module Microsoft.Graph -Scope CurrentUser
-```
-
-- Global Admin or Security Reader role in Entra ID
-
----
-
-## 🔑 Required Permissions
-
-| Scope | Purpose |
-|---|---|
-| `User.Read.All` | Read user accounts and properties |
-| `RoleManagement.Read.All` | Read directory roles and members |
-| `AuditLog.Read.All` | Read sign-in activity timestamps |
-| `UserAuthenticationMethod.Read.All` | Read MFA methods per user |
-
----
-
-## 🚀 How to Run
-
-```bash
-git clone https://github.com/felipearborestrepo/Privileged-Access-Weekly-Digest.git
-```
-
-```powershell
-.\PrivilegedAccessDigest.ps1
-```
-
----
-
-## ⚙️ How to Operationalize
-
-**Weekly — Every Friday**
-- Run script and review digest with security team
-- Investigate any red findings immediately
-- Track week over week improvement
-
-**Monthly**
-- Compare CSV reports month over month
-- Review any new role assignments added during the month
-- Verify all over-privileged admins have been remediated
-
-**Quarterly**
-- Full privileged access review against business justification
-- Remove roles that are no longer needed
-- Verify MFA is strong for all remaining admins
